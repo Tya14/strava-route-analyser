@@ -1,8 +1,8 @@
 from flask import Blueprint, redirect, request, current_app
 import requests
 from app.extensions import db
-from app.models import User, Activity
-from app.services.strava_service import get_activities_list, get_activity_detail
+from app.models import User, Activity, ActivityStream
+from app.services.strava_service import get_activities_list, get_activity_detail, get_activity_streams
 from datetime import datetime
 
 
@@ -132,6 +132,34 @@ def callback():
                     polyline=polyline
                 )
                 db.session.add(activity)
+
+
+                # 🚨 FETCH AND STORE STREAMS
+
+                streams = get_activity_streams(activity.strava_activity_id, access_token)
+
+                if streams:
+                    times = streams.get("time", {}).get("data", [])
+                    heartrate = streams.get("heartrate", {}).get("data", [])
+                    velocity = streams.get("velocity_smooth", {}).get("data", [])
+
+                    # avoid duplicates
+                    if not activity.streams:
+                        for i in range(len(times)):
+                            speed = velocity[i] if i < len(velocity) else None
+                            hr = heartrate[i] if i < len(heartrate) else None
+
+                            pace = 1000 / speed / 60 if speed and speed > 0 else None
+
+                            stream = ActivityStream(
+                                activity=activity,   # 👈 IMPORTANT (not activity_id)
+                                time=times[i],
+                                heartrate=hr,
+                                speed=speed,
+                                pace=pace
+                            )
+
+                            db.session.add(stream)
 
     db.session.commit()
 
