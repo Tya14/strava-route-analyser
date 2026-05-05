@@ -117,5 +117,5 @@ def callback():
     return f"""
     <h2>Login Successful</h2>
     <p><b>Athlete:</b> {athlete}</p>
-    <p><b>Access Token:</b> {access_token}</p>
+    <p><b>Access Token:</b>{access_token} </p>
     """
