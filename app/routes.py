@@ -4,6 +4,7 @@ from app.extensions import db
 from app.models import User, Activity, ActivityStream
 from app.services.strava_service import get_activities_list, get_activity_detail, get_activity_streams
 from datetime import datetime
+from flask import jsonify, session
 
 
 main = Blueprint("main", __name__)
@@ -28,9 +29,9 @@ def index():
 
 @main.route("/callback")
 def callback():
-    from flask import request, current_app
+    from flask import request, current_app, session
     import requests
-
+    
     # 1. Get the code from URL
     code = request.args.get("code")
 
@@ -163,9 +164,89 @@ def callback():
 
     db.session.commit()
 
+    
+
+    session["user_id"] = user.id
+
     # 4. Debug output (temporary)
     return f"""
     <h2>Login Successful</h2>
     <p><b>Athlete:</b> {act["id"]}</p>
     <p><b>Access Token:</b>{existing} </p>
     """
+
+
+@main.route("/activities")
+def get_activities():
+    user_id = session.get("user_id")
+
+    if not user_id:
+        return {"error": "unauthorized"}, 401
+
+    activities = Activity.query.filter_by(user_id=user_id).all()
+
+    return jsonify([
+        {
+            "id": a.id,
+            "name": a.name,
+            "type": a.activity_type,
+            "distance": a.distance_km,
+            "avg_hr": a.avg_heartrate,
+            "date": a.started_at.strftime("%Y-%m-%d") if a.started_at else None
+        }
+        for a in activities
+    ])
+
+
+from flask import jsonify, session
+from app.models import Activity
+
+
+@main.route("/activity/<int:id>")
+def get_activity(id):
+    user_id = session.get("user_id")
+
+    if not user_id:
+        return {"error": "unauthorized"}, 401
+
+    activity = Activity.query.filter_by(
+        id=id,
+        user_id=user_id   # 🔐 critical
+    ).first()
+
+    if not activity:
+        return {"error": "not found"}, 404
+
+    return jsonify({
+        "id": activity.id,
+        "name": activity.name,
+        "started_at": activity.started_at,
+        "polyline": activity.polyline,
+        "distance": activity.distance_km,
+        "duration": activity.duration_sec
+    })
+
+@main.route("/activity/<int:id>/streams")
+def get_activity_streams_endpoint(id):
+    user_id = session.get("user_id")
+
+    if not user_id:
+        return {"error": "unauthorized"}, 401
+
+    # 🔐 ensure activity belongs to user
+    activity = Activity.query.filter_by(
+        id=id,
+        user_id=user_id
+    ).first()
+
+    if not activity:
+        return {"error": "not found"}, 404
+
+    streams = ActivityStream.query.filter_by(activity_id=activity.id).all()
+
+    return jsonify({
+        "time": [s.time for s in streams],
+        "heartrate": [s.heartrate for s in streams],
+        "pace": [s.pace for s in streams]
+    })
+
