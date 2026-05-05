@@ -36,6 +36,8 @@ def get_activity_detail(activity_id, access_token):
     )
 
     if response.status_code != 200:
-        return {}
+        raise Exception(
+            f"Strava API error {response.status_code}: {response.text}"
+        )
 
     return response.json()

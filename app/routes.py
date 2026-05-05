@@ -74,48 +74,70 @@ def callback():
 
     activities = get_activities_list(access_token)
 
+    
+    with db.session.no_autoflush:
 
-    for act in activities:
-        existing = Activity.query.filter_by(
-            strava_activity_id=int(act["id"])
-        ).first()
-
-        polyline = act.get("map", {}).get("summary_polyline")
-
-        if not polyline:
-            detail_data = get_activity_detail(act["id"],access_token)
-            polyline = detail_data.get("map", {}).get("summary_polyline")
-
-
-        if existing:
-            if not existing.polyline:
-                existing.polyline = polyline
-            if not existing.avg_heartrate:
-                existing.avg_heartrate = act.get("average_heartrate")
-
-        else:
+        for act in activities:
+            existing = Activity.query.filter_by(
+                strava_activity_id=int(act["id"])
+            ).first()
             
-            activity = Activity(
-                strava_activity_id=act["id"],
-                user_id=user.id,
-                name=act.get("name"),
-                activity_type=act.get("type"),
-                started_at=datetime.fromisoformat(
-                    act.get("start_date").replace("Z", "")
-                ) if act.get("start_date") else None,
-                distance_km=act.get("distance", 0) / 1000,
-                duration_sec=act.get("moving_time"),
-                avg_heartrate=act.get("average_heartrate"),
-                max_heartrate=act.get("max_heartrate"),
-                polyline=polyline
-            )
-            db.session.add(activity)
+
+            if existing:
+
+
+                if not existing.polyline:
+
+
+                    polyline = act.get("map", {}).get("summary_polyline")
+
+                    if not polyline:
+
+                        detail_data = get_activity_detail(act["id"],access_token)
+                        map_data = detail_data.get("map", {})
+                        polyline = (
+                            map_data.get("polyline") or
+                            map_data.get("summary_polyline")
+                        )
+                        
+
+            
+                    existing.polyline = polyline
+
+            else:
+
+                polyline = act.get("map", {}).get("summary_polyline")
+
+                if not polyline:
+
+                    detail_data = get_activity_detail(act["id"],access_token)
+                    map_data = detail_data.get("map", {})
+                    polyline = (
+                        map_data.get("polyline") or
+                        map_data.get("summary_polyline")
+                    )
+                    
+                activity = Activity(
+                    strava_activity_id=act["id"],
+                    user_id=user.id,
+                    name=act.get("name"),
+                    activity_type=act.get("type"),
+                    started_at=datetime.fromisoformat(
+                        act.get("start_date").replace("Z", "")
+                    ) if act.get("start_date") else None,
+                    distance_km=act.get("distance", 0) / 1000,
+                    duration_sec=act.get("moving_time"),
+                    avg_heartrate=act.get("average_heartrate"),
+                    max_heartrate=act.get("max_heartrate"),
+                    polyline=polyline
+                )
+                db.session.add(activity)
 
     db.session.commit()
 
     # 4. Debug output (temporary)
     return f"""
     <h2>Login Successful</h2>
-    <p><b>Athlete:</b> {athlete}</p>
-    <p><b>Access Token:</b>{access_token} </p>
+    <p><b>Athlete:</b> {act["id"]}</p>
+    <p><b>Access Token:</b>{existing} </p>
     """
