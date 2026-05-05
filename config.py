@@ -8,3 +8,5 @@ class Config:
 
     SQLALCHEMY_DATABASE_URI = "sqlite:///app.db"
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+
+    DEV_MODE = os.environ.get("DEV_MODE", "True") == "True"
