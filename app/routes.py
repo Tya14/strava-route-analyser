@@ -1,7 +1,8 @@
 from flask import Blueprint, redirect, request, current_app
 import requests
 from app.extensions import db
-from app.models import User
+from app.models import User, Activity
+from datetime import datetime
 
 main = Blueprint("main", __name__)
 
@@ -69,9 +70,75 @@ def callback():
     # Save to database
     db.session.commit()
 
+
+    activities_url = "https://www.strava.com/api/v3/athlete/activities"
+
+    activities_response = requests.get(
+        activities_url,
+        headers={"Authorization": f"Bearer {access_token}"}
+    )
+
+    
+
+    if activities_response.status_code != 200:
+        return f"Error retrieving activity data: {activities_response.text}"
+
+    activities = activities_response.json()
+
+    # 6️⃣ Store activities
+    for act in activities:
+        existing = Activity.query.filter_by(
+            strava_activity_id=int(act["id"])
+        ).first()
+
+        polyline = act.get("map", {}).get("summary_polyline")
+
+        if not polyline:
+            act_id = act['id']
+            detail_url = f"https://www.strava.com/api/v3/activities/{act_id}"
+
+            response = requests.get(
+                detail_url,
+                headers={"Authorization": f"Bearer {access_token}"}
+            )
+            detail_data = response.json()
+            polyline = detail_data.get("map", {}).get("summary_polyline")
+
+
+        if existing:
+            if not existing.polyline:
+                existing.polyline = polyline
+            if not existing.avg_heartrate:
+                existing.avg_heartrate = act.get("average_heartrate")
+
+        else:
+            
+            activity = Activity(
+                strava_activity_id=act["id"],
+                user_id=user.id,
+                name=act.get("name"),
+                activity_type=act.get("type"),
+                started_at=datetime.fromisoformat(
+                    act.get("start_date").replace("Z", "")
+                ) if act.get("start_date") else None,
+                distance_km=act.get("distance", 0) / 1000,
+                duration_sec=act.get("moving_time"),
+                avg_heartrate=act.get("average_heartrate"),
+                max_heartrate=act.get("max_heartrate"),
+                polyline=polyline
+            )
+            db.session.add(activity)
+
+    db.session.commit()
+
+
+
+  
+   
+
     # 4. Debug output (temporary)
     return f"""
     <h2>Login Successful</h2>
     <p><b>Athlete:</b> {athlete}</p>
-    <p><b>Access Token:</b> {access_token}</p>
+    <p><b>Access Token:</b>{access_token} </p>
     """
