@@ -1,11 +1,22 @@
-import { dashboardData, historyData } from "/frontend/data.js";
-import { routesData } from "/frontend/routes_data.js";
+import { clusterRoutes } from "/frontend/route_clustering.js";
 
 let hrChartInstance = null;
+let activityMap = null;
+let currentPolyline = null;
 
 document.addEventListener("DOMContentLoaded", () => {
 
-  /* ================= NAV ================= */
+  initNav();
+
+  loadDashboard();
+  loadActivities();
+  loadRoutes();
+});
+
+
+/* ================= NAV ================= */
+
+function initNav() {
   document.querySelectorAll(".nav-icon").forEach(btn => {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".nav-icon").forEach(b => b.classList.remove("active"));
@@ -16,408 +27,336 @@ document.addEventListener("DOMContentLoaded", () => {
       document.getElementById(page)?.classList.add("visible");
     });
   });
+}
 
-  /* ================= DASHBOARD ================= */
-  document.getElementById("athleteName").textContent = dashboardData.athlete_name;
-  document.getElementById("avatar").textContent = dashboardData.athlete_name[0];
-  document.getElementById("riskScore").textContent = dashboardData.risk_score;
-  document.getElementById("riskLevel").textContent = dashboardData.risk_level;
-  document.getElementById("riskDesc").textContent = dashboardData.risk_desc;
-  document.getElementById("riskBar").style.width = dashboardData.risk_score + "%";
 
-  const alertsDiv = document.getElementById("alerts");
-  dashboardData.alerts.forEach(a => {
-    const el = document.createElement("div");
-    el.className = "alert-item";
-    el.innerHTML = `
-      <div class="alert-dot alert-dot--teal"></div>
-      <div class="alert-text">${a}</div>
-    `;
-    alertsDiv.appendChild(el);
-  });
+/* ================= DASHBOARD ================= */
 
-  new Chart(document.getElementById("loadChart"), {
-    type: "line",
+async function loadDashboard() {
+  try {
+    const res = await fetch("/dashboard");
+    if (!res.ok) throw new Error("Dashboard fetch failed");
+
+    const data = await res.json();
+
+    document.getElementById("athleteName").textContent = data.athlete_name || "You";
+    document.getElementById("avatar").textContent = (data.athlete_name || "U")[0];
+    document.getElementById("riskScore").textContent = data.risk_score ?? "-";
+    document.getElementById("riskLevel").textContent = data.risk_level || "-";
+    document.getElementById("riskDesc").textContent = data.risk_desc || "";
+    document.getElementById("riskBar").style.width = (data.risk_score || 0) + "%";
+
+    renderLoadChart(data);
+
+  } catch (err) {
+    console.error("Dashboard error:", err);
+  }
+}
+
+
+/* ================= DASHBOARD CHART ================= */
+
+function renderLoadChart(data) {
+  const el = document.getElementById("loadChart");
+  if (!el) return;
+
+  if (window.loadChartInstance) {
+    window.loadChartInstance.destroy();
+  }
+
+  window.loadChartInstance = new Chart(el, {
+    type: "bar",
     data: {
-      labels: dashboardData.chart.labels,
-      datasets: [
-        { data: dashboardData.chart.acute, borderColor: "#f03e3e", tension: 0.4, fill: false },
-        { data: dashboardData.chart.chronic, borderColor: "#1dd3b0", tension: 0.4, fill: false }
-      ]
+      labels: ["Acute", "Chronic"],
+      datasets: [{
+        data: [
+          data.acute_load || 0,
+          data.chronic_load || 0
+        ],
+        backgroundColor: ["#f03e3e", "#1dd3b0"]
+      }]
     },
     options: {
       maintainAspectRatio: false,
       plugins: { legend: { display: false } }
     }
   });
+}
 
-  /* ================= HISTORY ================= */
-  const table = document.getElementById("historyTable");
-  table.innerHTML = "";
-  let selectedRow = null;
 
-  historyData.slice(0, 10).forEach(a => {
+/* ================= ACTIVITIES ================= */
 
-    let avg_hr = a.avg_hr;
-    if (!avg_hr && a.chart?.hr?.length) {
-      const valid = a.chart.hr.filter(v => v != null);
-      avg_hr = valid.length
-        ? Math.round(valid.reduce((x, y) => x + y, 0) / valid.length)
-        : 0;
-    }
+async function loadActivities() {
+  try {
+    const res = await fetch("/activities");
+    if (!res.ok) throw new Error("Failed activities");
 
-    const typeClass =
-      a.type === "Run"  ? "type-badge--run"  :
-      a.type === "Ride" ? "type-badge--ride" : "type-badge--other";
+    const activities = await res.json();
 
-    let hrClass = "good";
-    if (avg_hr > 170) hrClass = "bad";
-    else if (avg_hr > 155) hrClass = "warn";
+    const table = document.getElementById("historyTable");
+    if (!table) return;
 
-    const riskClass =
-      a.risk === "Low"      ? "risk-pill--low" :
-      a.risk === "Moderate" ? "risk-pill--mod" : "risk-pill--high";
+    table.innerHTML = "";
 
-    const row = document.createElement("tr");
-    row.className = "history-row";
-    row.innerHTML = `
-      <td class="mono">${a.date}</td>
-      <td>${a.name}</td>
-      <td><span class="type-badge ${typeClass}">${a.type}</span></td>
-      <td class="mono">${a.distance.toFixed(1)} km</td>
-      <td class="mono ${hrClass}">${avg_hr || "-"} bpm</td>
-      <td class="mono">${a.tss}</td>
-      <td><span class="risk-pill ${riskClass}">${a.risk}</span></td>
-    `;
+    let selectedRow = null;
 
-    row.onclick = () => {
-      if (selectedRow) selectedRow.classList.remove("selected");
-      row.classList.add("selected");
-      selectedRow = row;
-      openActivity(a);
-    };
+    activities.slice(0, 10).forEach(a => {
 
-    table.appendChild(row);
-  });
+      const avg_hr = a.avg_hr || 0;
 
-  /* ================= ROUTES ================= */
-  let routeMap = null;
-  let routePolyline = null;
-  let drawing = false;
-  let drawnPoints = [];
-  let drawnLine = null;
+      const typeClass =
+        a.type === "Run"  ? "type-badge--run"  :
+        a.type === "Ride" ? "type-badge--ride" : "type-badge--other";
 
-  let matchPolylines = []; // ✅ NEW
+      let hrClass = "good";
+      if (avg_hr > 170) hrClass = "bad";
+      else if (avg_hr > 155) hrClass = "warn";
 
-  function haversine(p1, p2) {
-    const R = 6371000;
-    const toRad = x => x * Math.PI / 180;
+      const row = document.createElement("tr");
+      row.className = "history-row";
 
-    const dLat = toRad(p2[0] - p1[0]);
-    const dLon = toRad(p2[1] - p1[1]);
-
-    const a =
-      Math.sin(dLat / 2) ** 2 +
-      Math.cos(toRad(p1[0])) *
-      Math.cos(toRad(p2[0])) *
-      Math.sin(dLon / 2) ** 2;
-
-    return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  }
-
-  function routeMatchesSegment(routeLatLngs, segment, threshold = 40) {
-    let matches = 0;
-
-    for (let p of segment) {
-      for (let r of routeLatLngs) {
-        if (haversine(p, r) < threshold) {
-          matches++;
-          break;
-        }
-      }
-    }
-
-    return matches / segment.length > 0.6;
-  }
-
-  function renderMatchCard(matches) {
-    const card = document.getElementById("matchCard");
-    const list = document.getElementById("matchList");
-  
-    list.innerHTML = "";
-  
-    if (matches.length === 0) {
-      card.classList.add("hidden");
-      return;
-    }
-  
-    card.classList.remove("hidden");
-  
-    matches.forEach(route => {
-      const row = document.createElement("div");
-      row.className = "match-row";
-  
       row.innerHTML = `
-        <div class="match-date">${route.date || "-"}</div>
-        <div class="match-name">${route.name || "Activity"}</div>
-        <div class="match-distance">${route.distance_km || "-"} km</div>
+        <td class="mono">${a.date || "-"}</td>
+        <td>${a.name || "-"}</td>
+        <td><span class="type-badge ${typeClass}">${a.type || "-"}</span></td>
+        <td class="mono">${a.distance?.toFixed(1) || "-"} km</td>
+        <td class="mono ${hrClass}">${avg_hr || "-"}</td>
+        <td class="mono">-</td>
+        <td><span class="risk-pill risk-pill--low">-</span></td>
       `;
-  
-      // click = zoom to that route
+
       row.onclick = () => {
-        if (!routeMap) return;
-      
-        // 🔥 remove ALL current match lines
-        matchPolylines.forEach(l => routeMap.removeLayer(l));
-        matchPolylines = [];
-      
-        // 🔥 draw ONLY selected route
-        const line = L.polyline(route.latlngs, {
-          color: "#f03e3e",
-          weight: 6
-        }).addTo(routeMap);
-      
-        // store it so it can be cleared later if needed
-        matchPolylines.push(line);
-      
-        // zoom to it
-        routeMap.fitBounds(line.getBounds(), { padding: [40, 40] });
+        if (selectedRow) selectedRow.classList.remove("selected");
+        row.classList.add("selected");
+        selectedRow = row;
+        openActivity(a);
       };
-  
-      list.appendChild(row);
+
+      table.appendChild(row);
     });
+
+  } catch (err) {
+    console.error("Activities error:", err);
+  }
+}
+
+
+/* ================= ACTIVITY DETAIL ================= */
+
+function openActivity(activity) {
+  if (!activity) return;
+
+  document.querySelectorAll(".page").forEach(p => p.classList.remove("visible"));
+  document.getElementById("activity")?.classList.add("visible");
+
+  document.querySelectorAll(".nav-icon").forEach(b => b.classList.remove("active"));
+  document.querySelector('[data-page="activity"]')?.classList.add("active");
+
+  const title = document.querySelector(".activity-name");
+  if (title) title.textContent = activity.name || "Activity";
+
+  if (hrChartInstance) {
+    hrChartInstance.destroy();
+    hrChartInstance = null;
   }
 
-  function highlightMatches(matches) {
-    if (!routeMap) return;
-  
-    // clear previous
-    matchPolylines.forEach(l => routeMap.removeLayer(l));
-    matchPolylines = [];
-  
-    // color palette (nice + readable)
-    const colors = [
-      "#f03e3e", "#1dd3b0", "#4dabf7", "#ffd43b",
-      "#845ef7", "#ff922b", "#20c997", "#e64980"
-    ];
-  
-    matches.forEach((route, i) => {
-      const color = colors[i % colors.length]; // cycle if many routes
-  
-      const line = L.polyline(route.latlngs, {
-        color: color,
-        weight: 5,
-        opacity: 0.9
-      }).addTo(routeMap);
-  
-      matchPolylines.push(line);
-    });
-  
-    // auto-fit map
-    if (matches.length > 0) {
-      const group = L.featureGroup(
-        matches.map(r => L.polyline(r.latlngs))
-      );
-      routeMap.fitBounds(group.getBounds(), { padding: [30, 30] });
-    }
-  }
+  /* ===== STREAMS ===== */
+  fetch(`/activity/${activity.id}/streams`)
+    .then(res => res.json())
+    .then(streams => {
 
+      const rawHR = streams.heartrate || [];
+      const rawPace = streams.pace || [];
+      const labels = streams.time || [];
+
+      const smooth = (arr, w = 20) =>
+        arr.map((_, i) => {
+          let sum = 0, count = 0;
+          for (let j = i - w + 1; j <= i; j++) {
+            if (j >= 0 && arr[j] != null) {
+              sum += arr[j];
+              count++;
+            }
+          }
+          return count ? sum / count : null;
+        });
+
+      hrChartInstance = new Chart(document.getElementById("hrChart"), {
+        type: "line",
+        data: {
+          labels,
+          datasets: [
+            {
+              label: "HR",
+              data: smooth(rawHR),
+              borderColor: "#f03e3e",
+              tension: 0.4,
+              pointRadius: 0
+            },
+            {
+              label: "Pace",
+              data: smooth(rawPace),
+              borderColor: "#1dd3b0",
+              borderDash: [5,5],
+              tension: 0.4,
+              pointRadius: 0
+            }
+          ]
+        },
+        options: {
+          maintainAspectRatio: false,
+          interaction: { mode: "index", intersect: false }
+        }
+      });
+
+    })
+    .catch(err => console.error("Streams error:", err));
+
+  /* ===== MAP ===== */
+  fetch(`/activity/${activity.id}`)
+    .then(res => res.json())
+    .then(data => {
+      if (!data.polyline) return;
+
+      const coords = decodePolyline(data.polyline);
+
+      if (!activityMap) {
+        activityMap = L.map("leafletMap");
+        L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png")
+          .addTo(activityMap);
+      }
+
+      if (currentPolyline) {
+        activityMap.removeLayer(currentPolyline);
+      }
+
+      currentPolyline = L.polyline(coords, {
+        color: "#f03e3e",
+        weight: 4
+      }).addTo(activityMap);
+
+      activityMap.fitBounds(currentPolyline.getBounds());
+    })
+    .catch(err => console.error("Map error:", err));
+}
+
+
+/* ================= ROUTES ================= */
+
+async function loadRoutes() {
+  try {
+    const res = await fetch("/routes");
+    if (!res.ok) throw new Error("Routes failed");
+
+    const routes = await res.json();
+
+    const processed = routes
+      .map(r => ({
+        ...r,
+        latlngs: r.polyline ? decodePolyline(r.polyline) : []
+      }))
+      .filter(r => r.latlngs.length);
+
+    const clusters = clusterRoutes(processed);
+
+    renderClusters(clusters);
+
+  } catch (err) {
+    console.error("Routes error:", err);
+  }
+}
+
+
+function renderClusters(clusters) {
   const routesList = document.getElementById("routesList");
+  if (!routesList) return;
 
-  routesData.forEach((route, idx) => {
+  routesList.innerHTML = "";
+
+  clusters.slice(0, 10).forEach((cluster, idx) => {
+    const rep = cluster.representative;
+
     const row = document.createElement("div");
     row.className = "route-row";
 
     row.innerHTML = `
       <div class="route-rank">#${idx + 1}</div>
       <div class="route-info">
-        <div class="route-name">Route ${route.id}</div>
+        <div class="route-name">${rep.name || "Route"}</div>
         <div class="route-meta">
-          <span class="mono">${route.distance_km} km</span>
+          <span class="mono">${rep.distance_km?.toFixed(1) || "-"} km</span>
         </div>
       </div>
       <div class="route-right">
-        <span class="freq-badge">${route.count}×</span>
+        <span class="freq-badge">${cluster.count}×</span>
       </div>
     `;
 
-    row.onclick = () => openRouteMap(route);
+    row.onclick = () => openRouteCluster(cluster.routes);
+
     routesList.appendChild(row);
   });
+}
 
-  function openRouteMap(route) {
-    const mapPanel = document.getElementById("routeMapPanel");
-    mapPanel.classList.add("map-panel--open");
 
-    if (!routeMap) {
-      routeMap = L.map("leafletMap");
+function openRouteCluster(routes) {
+  if (!routes || !routes.length) return;
 
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png")
-        .addTo(routeMap);
+  const panel = document.getElementById("routeMapPanel");
+  panel?.classList.add("map-panel--open");
 
-      routeMap.on("click", (e) => {
-        if (!drawing) return;
-
-        drawnPoints.push([e.latlng.lat, e.latlng.lng]);
-
-        if (drawnLine) routeMap.removeLayer(drawnLine);
-
-        drawnLine = L.polyline(drawnPoints, {
-          color: "#1dd3b0",
-          weight: 4,
-          dashArray: "6,6"
-        }).addTo(routeMap);
-      });
-    }
-
-    if (routePolyline) routeMap.removeLayer(routePolyline);
-
-    routePolyline = L.polyline(route.latlngs, {
-      color: "#f03e3e",
-      weight: 4
-    }).addTo(routeMap);
-
-    routeMap.fitBounds(routePolyline.getBounds());
+  if (!window.routeMap) {
+    window.routeMap = L.map("leafletMap");
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png")
+      .addTo(window.routeMap);
   }
 
-  document.getElementById("drawRouteBtn").onclick = () => {
-    drawing = true;
-    drawnPoints = [];
-
-    if (drawnLine) {
-      routeMap.removeLayer(drawnLine);
-      drawnLine = null;
-    }
-  };
-
-  document.getElementById("findRouteBtn").onclick = () => {
-    if (!routeMap) return;
-  
-    if (drawnPoints.length < 2) {
-      alert("Draw a segment first");
-      return;
-    }
-  
-    const matches = routesData.filter(r =>
-      routeMatchesSegment(r.latlngs, drawnPoints)
-    );
-  
-    if (routePolyline) routeMap.removeLayer(routePolyline);
-  
-    highlightMatches(matches);
-  
-    // ✅ ADD THIS LINE
-    renderMatchCard(matches);
-  };
-
-  document.getElementById("clearDrawbtn").onclick = () => {
-    drawnPoints = [];
-  
-    if (drawnLine) {
-      routeMap.removeLayer(drawnLine);
-      drawnLine = null;
-    }
-  
-    matchPolylines.forEach(l => routeMap.removeLayer(l));
-    matchPolylines = [];
-  
-    // ✅ hide card
-    document.getElementById("matchCard").classList.add("hidden");
-  };
-
-  document.getElementById("closeMapBtn").onclick = () => {
-    document.getElementById("routeMapPanel").classList.remove("map-panel--open");
-  };
-
-});
-
-
-/* ================= ACTIVITY ================= */
-
-function openActivity(activity) {
-
-  document.querySelectorAll(".page").forEach(p => p.classList.remove("visible"));
-  document.getElementById("activity").classList.add("visible");
-
-  document.querySelectorAll(".nav-icon").forEach(b => b.classList.remove("active"));
-  document.querySelector('[data-page="activity"]').classList.add("active");
-
-  document.querySelector(".activity-name").textContent = activity.name;
-
-  if (hrChartInstance) hrChartInstance.destroy();
-
-  const rawHR = activity.chart?.hr || [];
-  const rawPace = activity.chart?.pace || [];
-  const labels = activity.chart?.labels || [];
-
-  function movingAverage(arr, windowSize = 20) {
-    const result = [];
-    for (let i = 0; i < arr.length; i++) {
-      let sum = 0, count = 0;
-      for (let j = i - windowSize + 1; j <= i; j++) {
-        if (j >= 0 && arr[j] != null) {
-          sum += arr[j];
-          count++;
-        }
-      }
-      result.push(count ? sum / count : null);
-    }
-    return result;
+  if (window.routeLines) {
+    window.routeLines.forEach(l => window.routeMap.removeLayer(l));
   }
 
-  const smoothHR = movingAverage(rawHR, 20);
-  const smoothPace = movingAverage(rawPace, 20);
+  window.routeLines = [];
 
-  hrChartInstance = new Chart(document.getElementById("hrChart"), {
-    type: "line",
-    data: {
-      labels: labels,
-      datasets: [
-        {
-          label: "Heart Rate",
-          data: smoothHR,
-          borderColor: "#f03e3e",
-          tension: 0.4,
-          pointRadius: 0,
-          yAxisID: "yHR"
-        },
-        {
-          label: "Pace",
-          data: smoothPace,
-          borderColor: "#1dd3b0",
-          borderDash: [5, 5],
-          tension: 0.4,
-          pointRadius: 0,
-          yAxisID: "yPace"
-        }
-      ]
-    },
-    options: {
-      maintainAspectRatio: false,
-      interaction: { mode: "index", intersect: false },
-      plugins: {
-        legend: { labels: { color: "#6b7280" } }
-      },
-      scales: {
-        x: {
-          ticks: { color: "#6b7280" },
-          grid: { color: "rgba(255,255,255,0.05)" }
-        },
-        yHR: {
-          type: "linear",
-          position: "left",
-          ticks: { color: "#f03e3e" },
-          title: { display: true, text: "Heart Rate (bpm)", color: "#f03e3e" }
-        },
-        yPace: {
-          type: "linear",
-          position: "right",
-          reverse: true,
-          ticks: { color: "#1dd3b0" },
-          grid: { drawOnChartArea: false },
-          title: { display: true, text: "Pace (min/km)", color: "#1dd3b0" }
-        }
-      }
-    }
+  routes.forEach(r => {
+    const line = L.polyline(r.latlngs, {
+      color: "#1dd3b0",
+      weight: 3,
+      opacity: 0.6
+    }).addTo(window.routeMap);
+
+    window.routeLines.push(line);
   });
+
+  const group = L.featureGroup(window.routeLines);
+  window.routeMap.fitBounds(group.getBounds());
+}
+
+
+/* ================= POLYLINE ================= */
+
+function decodePolyline(str) {
+  let index = 0, lat = 0, lng = 0, coords = [];
+
+  while (index < str.length) {
+    let b, shift = 0, result = 0;
+    do {
+      b = str.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    lat += (result & 1) ? ~(result >> 1) : (result >> 1);
+
+    shift = 0;
+    result = 0;
+    do {
+      b = str.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    lng += (result & 1) ? ~(result >> 1) : (result >> 1);
+
+    coords.push([lat / 1e5, lng / 1e5]);
+  }
+
+  return coords;
 }

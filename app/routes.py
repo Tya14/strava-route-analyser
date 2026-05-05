@@ -2,10 +2,9 @@ from flask import Blueprint, redirect, request, current_app, jsonify, session, s
 import requests
 from app.extensions import db
 from app.models import User, Activity, ActivityStream
-from app.services.strava_service import get_activities_list, get_activity_detail, get_activity_streams
+from app.services.strava_service import get_activities_list, get_activity_detail, get_activity_streams, compute_dashboard
 from datetime import datetime
 import os
-
 
 
 main = Blueprint("main", __name__)
@@ -221,7 +220,7 @@ def get_activity(id):
     return jsonify({
         "id": activity.id,
         "name": activity.name,
-        "started_at": activity.started_at,
+        "started_at": activity.started_at.isoformat() if activity.started_at else None,
         "polyline": activity.polyline,
         "distance": activity.distance_km,
         "duration": activity.duration_sec
@@ -252,7 +251,46 @@ def get_activity_streams_endpoint(id):
     })
 
 
+from flask import jsonify, session
+from app.models import Activity
 
+
+@main.route("/routes")
+def get_routes():
+    user_id = session.get("user_id")
+
+    if not user_id:
+        return {"error": "unauthorized"}, 401
+
+    activities = Activity.query.filter_by(user_id=user_id).all()
+
+    return jsonify([
+        {
+            "id": a.id,
+            "name": a.name,
+            "started_at": a.started_at.isoformat() if a.started_at else None,
+            "distance_km": a.distance_km,
+            "polyline": a.polyline
+        }
+        for a in activities
+        if a.polyline   # only return activities with routes
+    ])
+
+
+
+
+@main.route("/dashboard")
+def get_dashboard():
+    user_id = session.get("user_id")
+
+    if not user_id:
+        return {"error": "unauthorized"}, 401
+
+    activities = Activity.query.filter_by(user_id=user_id).all()
+
+    data = compute_dashboard(activities)
+
+    return jsonify(data)
 
 # absolute path to frontend folder
 FRONTEND_DIR = os.path.join(os.getcwd(), "frontend")

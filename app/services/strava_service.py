@@ -1,6 +1,8 @@
 import json
 from flask import current_app
 import requests
+from datetime import datetime
+
 
 
 def get_activities_list(access_token):
@@ -62,3 +64,53 @@ def get_activity_streams(activity_id, access_token):
         return None
 
     return response.json()
+
+
+
+
+def compute_dashboard(activities):
+    now = datetime.utcnow()
+
+    last_7 = []
+    last_30 = []
+
+    for a in activities:
+        if not a.started_at:
+            continue
+
+        days = (now - a.started_at).days
+
+        if days <= 7:
+            last_7.append(a)
+
+        if days <= 30:
+            last_30.append(a)
+
+    # simple load proxy (distance-based for now)
+    acute = sum((a.distance_km or 0) for a in last_7)
+    chronic = sum((a.distance_km or 0) for a in last_30) / 4 if last_30 else 0
+
+    ratio = acute / chronic if chronic else 0
+
+    # simple risk model
+    if ratio > 1.5:
+        risk = 80
+        level = "High"
+        desc = "You’ve increased load too quickly."
+    elif ratio > 1.2:
+        risk = 60
+        level = "Moderate"
+        desc = "Training load rising."
+    else:
+        risk = 30
+        level = "Low"
+        desc = "Load is stable."
+
+    return {
+        "athlete_name": "You",
+        "risk_score": int(risk),
+        "risk_level": level,
+        "risk_desc": desc,
+        "acute_load": round(acute, 1),
+        "chronic_load": round(chronic, 1)
+    }
