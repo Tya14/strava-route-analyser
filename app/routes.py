@@ -1,5 +1,7 @@
 from flask import Blueprint, redirect, request, current_app
 import requests
+from app.extensions import db
+from app.models import User
 
 main = Blueprint("main", __name__)
 
@@ -47,6 +49,25 @@ def callback():
     # 3. Extract info
     access_token = data.get("access_token")
     athlete = data.get("athlete")
+
+    strava_id = athlete.get("id")
+
+    # Check if user already exists
+    user = User.query.filter_by(strava_id=strava_id).first()
+
+    if not user:
+        # Create new user
+        user = User(
+            strava_id=strava_id,
+            access_token=access_token
+        )
+        db.session.add(user)
+    else:
+        # Update existing user's token
+        user.access_token = access_token
+
+    # Save to database
+    db.session.commit()
 
     # 4. Debug output (temporary)
     return f"""
