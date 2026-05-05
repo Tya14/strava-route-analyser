@@ -1,10 +1,11 @@
-from flask import Blueprint, redirect, request, current_app
+from flask import Blueprint, redirect, request, current_app, jsonify, session, send_from_directory
 import requests
 from app.extensions import db
 from app.models import User, Activity, ActivityStream
 from app.services.strava_service import get_activities_list, get_activity_detail, get_activity_streams
 from datetime import datetime
-from flask import jsonify, session
+import os
+
 
 
 main = Blueprint("main", __name__)
@@ -250,3 +251,18 @@ def get_activity_streams_endpoint(id):
         "pace": [s.pace for s in streams]
     })
 
+
+
+
+# absolute path to frontend folder
+FRONTEND_DIR = os.path.join(os.getcwd(), "frontend")
+
+
+@main.route("/app")
+def serve_frontend():
+    return send_from_directory(FRONTEND_DIR, "index.html")
+
+
+@main.route("/frontend/<path:path>")
+def serve_static(path):
+    return send_from_directory(FRONTEND_DIR, path)
