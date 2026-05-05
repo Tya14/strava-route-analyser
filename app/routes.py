@@ -20,3 +20,37 @@ def index():
     )
 
     return redirect(url)
+
+@main.route("/callback")
+def callback():
+    from flask import request, current_app
+    import requests
+
+    # 1. Get the code from URL
+    code = request.args.get("code")
+
+    if not code:
+        return "Error: No code received from Strava"
+
+    # 2. Exchange code for access token
+    token_url = "https://www.strava.com/oauth/token"
+
+    response = requests.post(token_url, data={
+        "client_id": current_app.config["STRAVA_CLIENT_ID"],
+        "client_secret": current_app.config["STRAVA_CLIENT_SECRET"],
+        "code": code,
+        "grant_type": "authorization_code"
+    })
+
+    data = response.json()
+
+    # 3. Extract info
+    access_token = data.get("access_token")
+    athlete = data.get("athlete")
+
+    # 4. Debug output (temporary)
+    return f"""
+    <h2>Login Successful</h2>
+    <p><b>Athlete:</b> {athlete}</p>
+    <p><b>Access Token:</b> {access_token}</p>
+    """
